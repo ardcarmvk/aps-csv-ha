@@ -42,7 +42,20 @@ For the Energy Dashboard, use the **statistics** the integration writes directly
 >
 > Solar support has been verified against a live APS solar account (TOU with demand charge, separate production meter). If your solar sensors are unavailable or wrong, please [open an issue](https://github.com/damianharouff/aps-csv-ha/issues) with your debug logs — account numbers redacted.
 
-All sensors update **every hour**. Energy sensors (kWh) are compatible with the [HA Energy Dashboard](https://www.home-assistant.io/docs/energy/).
+All sensors update **every hour**.
+
+### Statistics (Energy Dashboard)
+
+In addition to sensors, the integration writes **hourly long-term statistics** straight into Home Assistant's recorder — these are the recommended [Energy Dashboard](#energy-dashboard) sources:
+
+| Statistic | ID | Created for |
+|-----------|----|-------------|
+| APS Energy Consumption | `aps_usage:<account>_consumption` | Non-solar accounts |
+| APS Grid Import | `aps_usage:<account>_grid_import` | Solar accounts |
+| APS Grid Export | `aps_usage:<account>_grid_export` | Solar accounts |
+| APS Solar Generation | `aps_usage:<account>_solar_generation` | Solar accounts |
+
+Statistics are not entities — they won't appear in **Developer Tools → States**, only in the Energy Dashboard pickers and **Developer Tools → Statistics**.
 
 ---
 
@@ -114,6 +127,7 @@ Notes:
 - APS publishes data with a **~1-day delay**, so "today" is always empty and yesterday appears once APS posts it (typically early morning). The last 2 days are re-fetched whenever new data arrives, so estimated readings APS later corrects get rewritten.
 - If APS's hourly endpoint fails for a day, that day's total is recorded at midnight as a fallback — the day is still attributed correctly.
 - The *Current Cycle* sensors still exist for dashboards and automations, but statistics are the recommended Energy Dashboard source. If you previously configured the cycle sensors, swap them for the statistics above (you can purge the old sensor-based history from **Developer Tools → Statistics** if desired).
+- Numbers may differ slightly from solar-inverter apps (Tesla, Enphase, …): APS reports what its **revenue meter** records, while inverter hardware measures at a different point in the system — wiring losses, metering accuracy, hour-boundary alignment, and APS's estimated reads all contribute small gaps. The APS statistics are what you're actually billed on.
 
 ---
 
@@ -149,7 +163,7 @@ entities:
 
 ## Update Frequency
 
-The integration polls APS **once per hour**. APS updates usage data daily (not real-time), so energy readings reflect usage through the **previous day**. Balance and billing data reflect your APS.com balance at the last poll.
+The integration polls APS **once per hour**. APS updates usage data daily (not real-time), so energy readings reflect usage through the **previous day**. Balance and billing data reflect your APS.com balance at the last poll. Hourly statistics data is only fetched when APS publishes a new day (plus a 2-day overlap for corrections), so most hourly polls make no extra API calls.
 
 ---
 
@@ -175,6 +189,9 @@ The integration handles many account layouts (multiple agreements, solar product
 
 ### Solar sensors unavailable
 The solar endpoint is best-effort: if it fails, the core usage sensors keep working and the solar sensors go unavailable. Enable debug logging (below) and look for `APS: Solar usage API` or `no production meter` warnings, then open an issue with what you find.
+
+### Statistics missing or a day looks wrong
+Statistics failures never break the sensors — check the logs for `APS: statistics update failed` or (at debug level) `hourly … fetch failed`. A day recorded as a single midnight bar means the hourly endpoint had no data for it; it is rewritten automatically if APS publishes hourly data within the 2-day re-fetch window. To rebuild history from scratch, delete the `aps_usage:*` statistics in **Developer Tools → Statistics** and reload the integration — it will backfill 30 days again.
 
 ### Enable debug logging
 Add to `configuration.yaml` and restart:
