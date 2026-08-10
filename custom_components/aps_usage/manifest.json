@@ -5,12 +5,14 @@
     "@damianharouff"
   ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/damianharouff/aps-csv-ha",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/damianharouff/aps-csv-ha/issues",
   "requirements": [
     "cryptography>=41.0.0"
   ],
-  "version": "0.3.2"
+  "version": "0.4.0"
 }

@@ -32,9 +32,11 @@ A custom Home Assistant integration for **Arizona Public Service (APS)** custome
 | Yesterday Grid Export kWh | `sensor.aps_yesterday_grid_export_kwh` | kWh | Solar energy sold back to the grid |
 | Yesterday Solar Generated kWh | `sensor.aps_yesterday_solar_generated_kwh` | kWh | Total solar production |
 | Yesterday Solar Self-Consumed kWh | `sensor.aps_yesterday_solar_self_consumed_kwh` | kWh | Solar energy used on-site |
-| Current Cycle Grid Import kWh | `sensor.aps_current_cycle_grid_import_kwh` | kWh | Cumulative grid import this billing cycle (Energy Dashboard) |
-| Current Cycle Grid Export kWh | `sensor.aps_current_cycle_grid_export_kwh` | kWh | Cumulative grid export this billing cycle (Energy Dashboard) |
-| Current Cycle Solar Generated kWh | `sensor.aps_current_cycle_solar_generated_kwh` | kWh | Cumulative solar production this billing cycle (Energy Dashboard) |
+| Current Cycle Grid Import kWh | `sensor.aps_current_cycle_grid_import_kwh` | kWh | Cumulative grid import this billing cycle |
+| Current Cycle Grid Export kWh | `sensor.aps_current_cycle_grid_export_kwh` | kWh | Cumulative grid export this billing cycle |
+| Current Cycle Solar Generated kWh | `sensor.aps_current_cycle_solar_generated_kwh` | kWh | Cumulative solar production this billing cycle |
+
+For the Energy Dashboard, use the **statistics** the integration writes directly into HA's recorder (hourly resolution, attributed to the correct day and hour) instead of the cycle sensors — see [Energy Dashboard](#energy-dashboard).
 
 > **Note:** on solar accounts, APS's `totalUsage` (the regular usage sensors) reports **grid import**, not total household consumption. True consumption = Grid Import + Solar Self-Consumed.
 >
@@ -46,7 +48,7 @@ All sensors update **every hour**. Energy sensors (kWh) are compatible with the 
 
 ## Requirements
 
-- Home Assistant **2023.1** or newer
+- Home Assistant **2024.1** or newer
 - An active **APS.com account** (aps.com login credentials)
 - The `cryptography` Python package (automatically installed by HA)
 
@@ -96,17 +98,22 @@ The integration authenticates, auto-detects your active service agreement (and p
 
 ## Energy Dashboard
 
-The Energy Dashboard only accepts **cumulative** energy sensors (`total_increasing`), so use the *Current Cycle* sensors — the *Yesterday* sensors are daily snapshots meant for regular dashboards and automations, and won't appear as selectable sources.
+The integration writes **hourly statistics** directly into Home Assistant's recorder (the same mechanism the official Opower integration uses). Unlike sensor-based data — which lumps each day's usage into whichever hour HA happened to poll — these statistics are backdated to the actual hour the energy was used, so hourly, daily, weekly, and monthly views are all correct.
 
-Go to **Settings → Dashboards → Energy**:
+Go to **Settings → Dashboards → Energy** and pick the APS **statistics** (they appear alongside sensors in the pickers; search for "APS"):
 
-- **Grid consumption:** `sensor.aps_current_cycle_grid_import_kwh` (solar) or `sensor.aps_current_billing_cycle_kwh` (non-solar)
-- **Return to grid** (solar): `sensor.aps_current_cycle_grid_export_kwh`
-- **Solar production** (solar): `sensor.aps_current_cycle_solar_generated_kwh`
+- **Grid consumption:** `APS Grid Import` (solar) or `APS Energy Consumption` (non-solar)
+- **Return to grid** (solar): `APS Grid Export`
+- **Solar production** (solar): `APS Solar Generation`
 
-Home Assistant computes self-consumed solar automatically (production − export). The cycle sensors reset to zero at each billing-cycle boundary; HA treats that as a normal meter reset, so long-term statistics stay correct.
+Home Assistant computes self-consumed solar automatically (production − export).
 
-Two caveats inherent to APS's API: data arrives with a ~1-day delay, and each day's usage lands in statistics at the hour HA polls it — daily/weekly totals are accurate, but hour-by-hour breakdowns are not meaningful.
+Notes:
+
+- On first setup the integration backfills **30 days** of hourly history (one API request per day), so the initial refresh takes a minute or two. After that, only new days are fetched.
+- APS publishes data with a **~1-day delay**, so "today" is always empty and yesterday appears once APS posts it (typically early morning). The last 2 days are re-fetched whenever new data arrives, so estimated readings APS later corrects get rewritten.
+- If APS's hourly endpoint fails for a day, that day's total is recorded at midnight as a fallback — the day is still attributed correctly.
+- The *Current Cycle* sensors still exist for dashboards and automations, but statistics are the recommended Energy Dashboard source. If you previously configured the cycle sensors, swap them for the statistics above (you can purge the old sensor-based history from **Developer Tools → Statistics** if desired).
 
 ---
 
@@ -199,11 +206,17 @@ GET https://mobi.aps.com/ccb-billing/v1/getdailyusagecharges
 ```
 Query parameters: `action=read`, `accountNumber`, `userName`, `emailAddress`, `sAID` (Service Agreement ID), `spId` (Service Point ID), `startDate`, `endDate`, `cSSUser=APSCOM`. The response contains a `series` array (one entry per day) with `totalUsage`, `onPeakUsage`, `offPeakUsage`, temperature, and charge amounts, plus `billCycleDates` marking billing cycle boundaries.
 
+### Hourly Usage Data
+```
+GET https://mobi.aps.com/ccb-billing/v1/gethourlyusagecharges
+```
+Same parameters and auth as the daily endpoint, but a single `date=YYYY-MM-DD` instead of a range. Each `series` item carries `readTime` (`"01:00 AM"`), `totalUsage`, the on/off-peak splits, and `hasEstimatedData`/`hasMissingData` flags; `periodicity` gives minutes per reading (usually 60). Used to backfill hourly long-term statistics.
+
 ### Solar Data (solar accounts)
 ```
 POST https://mobi.aps.com/customerhistoryservices/v1/getsummarizedusagesolardata
 ```
-JSON body includes both meters: `utilityMeterNumber`/`utilityMeterSPId` and `prodMeterNumber`/`prodMeterSPId`, plus `saId`, `premiseId`, `displayType: "D"`, a date range, and a `ratePlan` array. The response's `Series` array carries per-day `totalAPSEnergyUsed` (grid import), `totalPowerGenerated` (production), `totalGenerationSold` (export), and `totalGenerationUsed` (self-consumed), each with actual + estimated variants.
+JSON body includes both meters: `utilityMeterNumber`/`utilityMeterSPId` and `prodMeterNumber`/`prodMeterSPId`, plus `saId`, `premiseId`, `displayType` (`"D"` daily, `"H"` hourly, `"M"` monthly), a date range, and a `ratePlan` array. The response's `Series` array carries per-day `totalAPSEnergyUsed` (grid import), `totalPowerGenerated` (production), `totalGenerationSold` (export), and `totalGenerationUsed` (self-consumed), each with actual + estimated variants. For hourly requests, set both dates to the same day — the `date` field of each item then carries the hour label.
 
 ### Financial Data
 Extracted directly from the `GetAllUserDetails` response — `getAccountFinancialDetails` contains `currentBalance`, `dueDt`, `lastPayAmt`, `lastPayDt`, and `newCharges`. No additional API call is needed.

@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import APSAuthError, APSUsageAPI, APSUsageData
 from .const import DAYS_OF_HISTORY, DOMAIN, UPDATE_INTERVAL_SECONDS
+from .statistics import APSStatistics
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -45,6 +46,7 @@ class APSDataCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, api: APSUsageAPI) -> None:
         self.api = api
+        self.statistics = APSStatistics(hass, api)
         super().__init__(
             hass,
             _LOGGER,
@@ -64,6 +66,12 @@ class APSDataCoordinator(DataUpdateCoordinator):
             solar = None
             if self.api.is_solar:
                 solar = await self.api.get_solar_usage(DAYS_OF_HISTORY)
+            # Write hourly history into long-term statistics (Energy
+            # Dashboard). Never let a statistics problem fail the refresh.
+            try:
+                await self.statistics.async_update(usage, solar)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("APS: statistics update failed")
             return {"usage": usage, "financial": financial, "solar": solar}
         except APSAuthError as err:
             raise UpdateFailed(f"APS authentication error: {err}") from err

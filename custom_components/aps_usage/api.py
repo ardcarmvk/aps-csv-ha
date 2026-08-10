@@ -44,6 +44,10 @@ USER_DETAILS_URL = f"{SITECORE_BASE}/api/sitecore/sitecorereactapi/GetAllUserDet
 # mobi.aps.com — daily usage charges (GET with query params, discovered from Dashboard.js)
 DAILY_USAGE_URL = "https://mobi.aps.com/ccb-billing/v1/getdailyusagecharges"
 
+# mobi.aps.com — hourly usage for a single day (GET, same auth as daily;
+# from Dashboard.js getHourlyUsageChargesRequest / GET_HOURLY_USAGE_DATA)
+HOURLY_USAGE_URL = "https://mobi.aps.com/ccb-billing/v1/gethourlyusagecharges"
+
 # mobi.aps.com — solar generation/export data (POST, used by the dashboard
 # when the selected service agreement has isSolar=true)
 SOLAR_USAGE_URL = (
@@ -577,6 +581,11 @@ class APSUsageAPI:
         """Whether the account has solar (per the isSolar SASP flag)."""
         return self._is_solar
 
+    @property
+    def account_id(self) -> str | None:
+        """APS account ID (available after authentication)."""
+        return self._account_id
+
     # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
@@ -840,16 +849,85 @@ class APSUsageAPI:
             premise_address=self._premise_address or "",
         )
 
+    async def get_hourly_usage(self, day: str) -> list[dict]:
+        """Fetch hourly kWh usage for a single day (YYYY-MM-DD).
+
+        GET /ccb-billing/v1/gethourlyusagecharges — same auth as the daily
+        endpoint, but takes a single `date` instead of a range. Each series
+        item carries readTime ("01:00 AM"), totalUsage, and the on/off-peak
+        splits; `periodicity` gives minutes per reading (usually 60).
+        """
+        await self._ensure_authenticated()
+
+        if not self._sa_id or not self._sp_id:
+            raise APSAuthError("No active service agreement found.")
+
+        params = {
+            "action": "read",
+            "accountNumber": self._account_id or "",
+            "userName": self._username,
+            "emailAddress": self._email or "",
+            "sAID": self._sa_id,
+            "spId": self._sp_id,
+            "date": day,
+            "cSSUser": CSS_USER,
+        }
+        url = f"{HOURLY_USAGE_URL}?{urllib.parse.urlencode(params)}"
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Authorization": f"Bearer {self._b2c_access_token}",
+            "Ocp-Apim-Subscription-Key": OCP_APIM_KEY,
+            "Origin": SITECORE_BASE,
+            "Referer": f"{SITECORE_BASE}/en/Residential/Account/Overview/Dashboard",
+            "User-Agent": _USER_AGENT,
+        }
+
+        async with self._session.get(url, headers=headers) as resp:
+            if resp.status == 401:
+                _LOGGER.warning("APS: 401 on hourly usage GET — re-authenticating.")
+                await self.authenticate()
+                headers["Authorization"] = f"Bearer {self._b2c_access_token}"
+                async with self._session.get(url, headers=headers) as retry:
+                    retry.raise_for_status()
+                    data = await retry.json(content_type=None)
+            else:
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+
+        return _as_list(_ci_get(data, "series"))
+
     async def get_solar_usage(self, days: int = 60) -> APSSolarData | None:
-        """Fetch solar generation/export data (solar accounts only).
+        """Fetch daily solar generation/export data (solar accounts only).
+
+        Best-effort: returns None (with a log entry) instead of raising, so
+        a solar endpoint hiccup never breaks the core usage sensors.
+        """
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=days)
+        series = await self._fetch_solar_series(
+            start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), "D"
+        )
+        return APSSolarData(series) if series is not None else None
+
+    async def get_solar_hourly(self, day: str) -> list[dict] | None:
+        """Fetch hourly solar data for a single day (YYYY-MM-DD).
+
+        Same endpoint as daily solar but displayType "H" with the start and
+        end date both set to the requested day (matching the dashboard's
+        hourly view). The `date` field of each Series item carries the hour
+        label. Best-effort: None on failure.
+        """
+        return await self._fetch_solar_series(day, day, "H")
+
+    async def _fetch_solar_series(
+        self, start_str: str, end_str: str, display_type: str
+    ) -> list[dict] | None:
+        """POST getsummarizedusagesolardata and return its Series list.
 
         POST /customerhistoryservices/v1/getsummarizedusagesolardata — the
         endpoint the APS dashboard uses when the selected service agreement
         has isSolar=true. Requires both the utility meter and the separate
         production meter (its own SASP/SP).
-
-        Best-effort: returns None (with a log entry) instead of raising, so
-        a solar endpoint hiccup never breaks the core usage sensors.
         """
         await self._ensure_authenticated()
 
@@ -864,11 +942,6 @@ class APSUsageAPI:
             )
             return None
 
-        end_dt = datetime.now()
-        start_dt = end_dt - timedelta(days=days)
-        start_str = start_dt.strftime("%Y-%m-%d")
-        end_str = end_dt.strftime("%Y-%m-%d")
-
         payload = {
             "accountId": self._account_id or "",
             "cssUser": CSS_USER,
@@ -881,7 +954,7 @@ class APSUsageAPI:
             "prodMeterSPId": self._prod_meter["sp_id"],
             "saId": self._sa_id,
             "premiseId": self._premise_id or "",
-            "displayType": "D",
+            "displayType": display_type,
             "ratePlan": [
                 {
                     "servicePlan": self._rate_plan_code or "",
@@ -939,13 +1012,16 @@ class APSUsageAPI:
 
         series = _as_list(_ci_get(data, "Series"))
         if not series:
-            _LOGGER.warning(
+            # Missing Series is unexpected for a daily range but normal for
+            # an hourly request on a day APS hasn't published yet.
+            _LOGGER.log(
+                logging.WARNING if display_type == "D" else logging.DEBUG,
                 "APS: Solar usage response had no Series. Keys: %s",
                 sorted(data.keys()) if isinstance(data, dict) else type(data).__name__,
             )
             return None
 
-        return APSSolarData(series)
+        return series
 
     async def get_financial_data(self) -> dict[str, Any]:
         """Return financial data extracted from GetAllUserDetails.
