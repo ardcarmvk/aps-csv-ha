@@ -33,6 +33,7 @@ from homeassistant.components.recorder.statistics import (
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .api import APSSolarData, APSUsageAPI, APSUsageData, _ci_get
 from .const import (
@@ -347,6 +348,9 @@ class APSStatistics:
             source=DOMAIN,
             statistic_id=stat_id,
             unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            # Required from HA 2026.11 (warned since 2025.10); lets HA
+            # convert kWh <-> Wh/MWh in the Energy Dashboard.
+            unit_class=EnergyConverter.UNIT_CLASS,
             **_MEAN_KWARGS,
         )
         async_add_external_statistics(self.hass, metadata, stats)
