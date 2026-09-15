@@ -93,7 +93,8 @@ class APSYesterdayKwhSensor(_APSBase):
     _attr_name = "APS Yesterday kWh"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # Snapshot that goes up and down; HA forbids 'measurement' with the energy device class.
+    _attr_state_class = None
     _attr_icon = "mdi:lightning-bolt"
     _attr_suggested_display_precision = 2
 
@@ -137,7 +138,8 @@ class APSThirtyDayKwhSensor(_APSBase):
     _attr_name = "APS 30-Day kWh"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # Snapshot that goes up and down; HA forbids 'measurement' with the energy device class.
+    _attr_state_class = None
     _attr_icon = "mdi:calendar-month"
     _attr_suggested_display_precision = 2
 
@@ -156,7 +158,8 @@ class APSOnPeakYesterdaySensor(_APSBase):
     _attr_name = "APS Yesterday On-Peak kWh"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # Snapshot that goes up and down; HA forbids 'measurement' with the energy device class.
+    _attr_state_class = None
     _attr_icon = "mdi:lightning-bolt-circle"
     _attr_suggested_display_precision = 2
 
@@ -175,7 +178,8 @@ class APSOffPeakYesterdaySensor(_APSBase):
     _attr_name = "APS Yesterday Off-Peak kWh"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # Snapshot that goes up and down; HA forbids 'measurement' with the energy device class.
+    _attr_state_class = None
     _attr_icon = "mdi:lightning-bolt-outline"
     _attr_suggested_display_precision = 2
 
@@ -193,7 +197,8 @@ class _APSSolarBase(_APSBase):
 
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # Snapshot that goes up and down; HA forbids 'measurement' with the energy device class.
+    _attr_state_class = None
     _attr_suggested_display_precision = 2
 
     @property
@@ -341,7 +346,7 @@ class APSBalanceSensor(_APSBase):
     _attr_name = "APS Current Balance"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_icon = "mdi:currency-usd"
     _attr_suggested_display_precision = 2
 
@@ -400,7 +405,7 @@ class APSLastPaymentSensor(_APSBase):
     _attr_name = "APS Last Payment"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = None
     _attr_icon = "mdi:check-circle"
     _attr_suggested_display_precision = 2
 
