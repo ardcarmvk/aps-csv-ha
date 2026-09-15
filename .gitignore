@@ -1,2 +1,4 @@
 .test_creds.json
 __pycache__/
+.DS_Store
+._*
