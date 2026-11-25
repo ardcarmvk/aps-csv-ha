@@ -91,6 +91,20 @@ def _as_list(value: Any) -> list:
     return []
 
 
+def _find_values(node: Any, key: str) -> list:
+    """Every value stored under `key` anywhere in a nested dict/list."""
+    found: list = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key:
+                found.append(v)
+            found.extend(_find_values(v, key))
+    elif isinstance(node, list):
+        for v in node:
+            found.extend(_find_values(v, key))
+    return found
+
+
 def _sa_is_active(sa_end: str) -> bool:
     """Whether an SA end date means "still active".
 
@@ -546,6 +560,37 @@ class APSSolarData:
     def generated_since(self, start_date: str | None) -> float:
         """Solar production kWh since a date (e.g. billing cycle start)."""
         return self._since_kwh(self._GENERATED, start_date)
+
+    def daily_peak_demand(
+        self, start_date: str | None, end_date: str | None = None
+    ) -> list[dict]:
+        """Per-day on-peak demand (kW) between two dates, inclusive.
+
+        `PeakDemand` is the highest on-peak clock-hour average for that day,
+        as APS's meter recorded it. Weekends and holidays come back as 0.0.
+        Days without a parseable value are skipped.
+        """
+        days = []
+        for item in self.series:
+            day = str(_ci_get(item, "date") or "")[:10]
+            if not day or (start_date and day < start_date):
+                continue
+            if end_date and day > end_date:
+                continue
+            kw = self._value(item, "PeakDemand")
+            if kw is not None:
+                days.append({"date": day, "kw": round(kw, 3)})
+        return days
+
+    def peak_demand(
+        self, start_date: str | None, end_date: str | None = None
+    ) -> tuple[float | None, str | None]:
+        """Highest daily PeakDemand between two dates, and the day it occurred."""
+        days = self.daily_peak_demand(start_date, end_date)
+        if not days:
+            return None, None
+        top = max(days, key=lambda d: d["kw"])
+        return top["kw"], top["date"]
 
 
 class APSUsageAPI:
@@ -1058,7 +1103,21 @@ class APSUsageAPI:
             .get("getAccountFinancialDetails", {})
         )
 
+        # Billing period boundaries. billSegmentEndDate sits on each service
+        # point; solar accounts also list the production meter, whose value
+        # is blank, so take the latest non-empty one.
+        seg_ends = [
+            str(v)[:10] for v in _find_values(details, "billSegmentEndDate") if v
+        ]
+        latest_bill = next(
+            (b for b in _find_values(details, "latestBillDetails") if isinstance(b, dict)),
+            {},
+        )
+
         return {
+            "bill_period_end": max(seg_ends) if seg_ends else None,
+            "bill_date": latest_bill.get("billDate") or None,
+            "bill_period_days": latest_bill.get("billPeriodbillingDays") or None,
             "account_id": profile.get("AccountID", ""),
             "outstanding_balance": fin.get(
                 "currentBalance", profile.get("OutstandingBillAmount")
