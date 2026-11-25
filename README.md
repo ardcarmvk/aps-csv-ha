@@ -23,6 +23,7 @@ A custom Home Assistant integration for **Arizona Public Service (APS)** custome
 | Current Balance | `sensor.aps_current_balance` | USD | Outstanding bill amount |
 | Bill Due Date | `sensor.aps_bill_due_date` | date | Next payment due date |
 | Last Payment | `sensor.aps_last_payment` | USD | Most recent payment amount |
+| Bill Period End | `sensor.aps_bill_period_end` | date | Last day of the most recently billed period (`billSegmentEndDate`); the current period starts the next day. Attributes: `current_period_start`, `billed_period_start`, `billed_period_days`, `bill_date` |
 
 ### Solar accounts (created automatically when APS flags your service agreement as solar)
 
@@ -35,6 +36,7 @@ A custom Home Assistant integration for **Arizona Public Service (APS)** custome
 | Current Cycle Grid Import kWh | `sensor.aps_current_cycle_grid_import_kwh` | kWh | Cumulative grid import this billing cycle |
 | Current Cycle Grid Export kWh | `sensor.aps_current_cycle_grid_export_kwh` | kWh | Cumulative grid export this billing cycle |
 | Current Cycle Solar Generated kWh | `sensor.aps_current_cycle_solar_generated_kwh` | kWh | Cumulative solar production this billing cycle |
+| Billing Period Peak Demand | `sensor.aps_billing_period_peak_demand` | kW | Highest daily on-peak demand (`PeakDemand`) since the current period started, as APS metered it; lags about a day. Attributes: `peak_date`, `billed_kw` (APS bills in tenths of a kW, rounded down), `daily`, and `previous_period_peak_kw` / `previous_period_billed_kw` to check against the last bill |
 
 For the Energy Dashboard, use the **statistics** the integration writes directly into HA's recorder (hourly resolution, attributed to the correct day and hour) instead of the cycle sensors — see [Energy Dashboard](#energy-dashboard).
 
