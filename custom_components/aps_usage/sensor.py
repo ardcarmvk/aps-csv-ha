@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -11,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -36,6 +37,7 @@ async def async_setup_entry(
         APSOffPeakYesterdaySensor(coordinator, entry),
         APSBalanceSensor(coordinator, entry),
         APSDueDateSensor(coordinator, entry),
+        APSBillPeriodEndSensor(coordinator, entry),
         APSLastPaymentSensor(coordinator, entry),
     ]
     if coordinator.api.is_solar:
@@ -47,6 +49,7 @@ async def async_setup_entry(
             APSCycleGridImportSensor(coordinator, entry),
             APSCycleGridExportSensor(coordinator, entry),
             APSCycleSolarGeneratedSensor(coordinator, entry),
+            APSPeakDemandSensor(coordinator, entry),
         ]
     async_add_entities(entities, update_before_add=True)
 
@@ -338,6 +341,128 @@ class APSCycleSolarGeneratedSensor(_APSSolarCycleBase):
     def native_value(self) -> float | None:
         solar = self._solar
         return solar.generated_since(self._cycle_start()) if solar else None
+
+
+def _parse_day(val: Any) -> date | None:
+    try:
+        return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()  # noqa: DTZ007
+    except (ValueError, TypeError):
+        return None
+
+
+def _billed_kw(kw: float | None) -> float | None:
+    """APS bills demand in tenths of a kW, rounded down.
+
+    Confirmed on two R-3 bills: PeakDemand 0.31 → 0.3 kW and 0.37 → 0.3 kW.
+    """
+    if kw is None:
+        return None
+    return math.floor(kw * 10 + 1e-9) / 10
+
+
+class APSBillPeriodEndSensor(_APSBase):
+    """Last day of the most recently billed period (billSegmentEndDate).
+
+    The current, unbilled period starts the day after. More reliable than
+    bill_cycle_start, and unlike the due date it is the actual boundary.
+    """
+
+    _attr_name = "APS Bill Period End"
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_icon = "mdi:calendar-end"
+
+    def __init__(self, coordinator: APSDataCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "bill_period_end")
+
+    @property
+    def native_value(self) -> date | None:  # type: ignore[override]
+        return _parse_day(self._financial.get("bill_period_end"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        fin = self._financial
+        end = self.native_value
+        days = fin.get("bill_period_days")
+        try:
+            start = end - timedelta(days=int(days) - 1) if end and days else None
+        except (ValueError, TypeError):
+            start = None
+        return {
+            "current_period_start": (end + timedelta(days=1)).isoformat() if end else None,
+            "billed_period_start": start.isoformat() if start else None,
+            "billed_period_days": days,
+            "bill_date": fin.get("bill_date"),
+        }
+
+
+class APSPeakDemandSensor(_APSSolarBase):
+    """Highest on-peak demand (kW) so far in the current billing period.
+
+    From APS's own per-day PeakDemand, so it lags about a day. The period
+    starts the day after billSegmentEndDate; if that is missing it falls
+    back to bill_cycle_start (see the `period_source` attribute).
+    """
+
+    _attr_name = "APS Billing Period Peak Demand"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:podium-gold"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: APSDataCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "period_peak_demand")
+
+    def _period(self) -> tuple[str | None, str]:
+        end = _parse_day(self._financial.get("bill_period_end"))
+        if end:
+            return (end + timedelta(days=1)).isoformat(), "bill_period_end"
+        usage = self._usage
+        return (usage.current_bill_cycle_start if usage else None), "bill_cycle_start"
+
+    @property
+    def native_value(self) -> float | None:
+        solar = self._solar
+        if not solar:
+            return None
+        kw, _ = solar.peak_demand(self._period()[0])
+        return kw
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = super().extra_state_attributes
+        solar = self._solar
+        start, source = self._period()
+        attrs.update({"period_start": start, "period_source": source})
+        if not solar:
+            return attrs
+        kw, day = solar.peak_demand(start)
+        attrs.update(
+            {
+                "peak_date": day,
+                "billed_kw": _billed_kw(kw),
+                "daily": solar.daily_peak_demand(start),
+            }
+        )
+        # The billed period, to check against the bill's demand line.
+        fin = self._financial
+        end = _parse_day(fin.get("bill_period_end"))
+        try:
+            days = int(fin.get("bill_period_days") or 0)
+        except (ValueError, TypeError):
+            days = 0
+        if end and days:
+            prev_kw, prev_day = solar.peak_demand(
+                (end - timedelta(days=days - 1)).isoformat(), end.isoformat()
+            )
+            attrs.update(
+                {
+                    "previous_period_peak_kw": prev_kw,
+                    "previous_period_peak_date": prev_day,
+                    "previous_period_billed_kw": _billed_kw(prev_kw),
+                }
+            )
+        return attrs
 
 
 class APSBalanceSensor(_APSBase):
